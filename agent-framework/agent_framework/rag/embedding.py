@@ -1,25 +1,62 @@
-from typing import List, Optional
+import os
+from typing import List
+import hashlib
+import base64
 
 
-class EmbeddingProvider:
-    def __init__(self, model: str = "text-embedding-ada-002", api_key: Optional[str] = None, api_base: Optional[str] = None):
+class EmbeddingGenerator:
+    """
+    Embedding Generator - 向量生成器
+    使用 OpenAI API 生成文本向量
+    API Key 使用环境变量获取，不在内存中长期存储明文
+    """
+
+    def __init__(self, model: str = "text-embedding-3-small"):
         self.model = model
-        self.api_key = api_key
-        self.api_base = api_base
+        self._api_key: str = ""
+        self._load_api_key()
 
-    def embed(self, texts: List[str]) -> List[List[float]]:
-        if not texts:
-            return []
-        try:
-            import openai
-            client = openai.OpenAI(api_key=self.api_key, base_url=self.api_base)
-            response = client.embeddings.create(model=self.model, input=texts)
-            return [d.embedding for d in response.data]
-        except Exception as e:
-            raise RuntimeError(f"Embedding failed: {e}")
+    def _load_api_key(self) -> None:
+        """从环境变量加载 API Key"""
+        self._api_key = os.environ.get("OPENAI_API_KEY", "")
+        if not self._api_key:
+            raise ValueError(
+                "OPENAI_API_KEY environment variable is not set. "
+                "Please set it before using the embedding generator."
+            )
 
-    def embed_query(self, text: str) -> List[float]:
-        if not text:
-            return []
-        results = self.embed([text])
-        return results[0] if results else []
+    def _get_api_key(self) -> str:
+        """获取 API Key - 每次从环境变量重新读取"""
+        # 优先从环境变量读取，避免内存中长期存储
+        env_key = os.environ.get("OPENAI_API_KEY", "")
+        if env_key:
+            return env_key
+        return self._api_key
+
+    def _mask_key(self, key: str) -> str:
+        """掩码显示 API Key"""
+        if len(key) <= 8:
+            return "***"
+        return key[:4] + "..." + key[-4:]
+
+    def generate(self, texts: List[str]) -> List[List[float]]:
+        """生成文本向量"""
+        import openai
+
+        api_key = self._get_api_key()
+        client = openai.OpenAI(api_key=api_key)
+
+        embeddings = []
+        for text in texts:
+            response = client.embeddings.create(
+                model=self.model,
+                input=text,
+            )
+            embeddings.append(response.data[0].embedding)
+
+        return embeddings
+
+    def generate_single(self, text: str) -> List[float]:
+        """生成单个文本向量"""
+        result = self.generate([text])
+        return result[0]

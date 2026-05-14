@@ -105,12 +105,19 @@ class DeepSeekProvider(BaseLLM):
 
     def _init_client(self):
         """初始化HTTP客户端"""
+        api_key = self.config.api_key
+        if not api_key:
+            raise ValueError(
+                "DeepSeek API key is not configured. "
+                "Please set the DEEPSEEK_API_KEY environment variable or provide it in the config."
+            )
+
         timeout = httpx.Timeout(self.config.timeout, connect=10.0)
         self._client = httpx.AsyncClient(
             base_url=self.config.api_base,
             timeout=timeout,
             headers={
-                "Authorization": f"Bearer {self.config.api_key}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
                 "User-Agent": "DeepSeek-Optimization/2.0.0",
             },

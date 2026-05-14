@@ -45,7 +45,9 @@ class DataProtectionManager:
         ),
         PIIPattern(
             name="credit_card",
-            pattern=r"\b(?:\d[ -]*?){13,16}\b",
+            # 使用更安全的正则，避免灾难性回溯
+            # 匹配 13-16 位数字，可选的空格或横线分隔
+            pattern=r"\b(?:\d{4}[- ]?){3}\d{1,4}\b|\b\d{13,16}\b",
             mask_format="***REDACTED_CC***"
         ),
     ]

@@ -20,9 +20,8 @@ from ..llm.model_config import DEEPSEEK_PRICING, DeepSeekModel
 
 @dataclass
 class CacheEntry:
-    """缓存条目"""
-    prompt: str
-    messages: List[Dict]
+    """缓存条目 - 不存储敏感消息内容"""
+    prompt_hash: str
     response: Any
     tokens_used: int
     model: str
@@ -145,10 +144,10 @@ class CacheEngine:
         cache_key = self._compute_cache_key(messages, model)
         text_content = self._extract_text_from_messages(messages)
 
-        # 创建缓存条目
+        # 创建缓存条目 - 只存储哈希值，不存储原始消息内容
+        prompt_hash = hashlib.sha256(text_content.encode("utf-8")).hexdigest()
         entry = CacheEntry(
-            prompt=text_content,
-            messages=[msg.model_dump() for msg in messages],
+            prompt_hash=prompt_hash,
             response=response,
             tokens_used=tokens_used,
             model=model or "default",
@@ -194,16 +193,19 @@ class CacheEngine:
 
     def invalidate(self, pattern: Optional[str] = None):
         """失效缓存"""
-        if pattern:
-            # 按模式删除
+        if pattern is not None and pattern != "":
+            # 按模式删除 - 拒绝空字符串模式以防止全局清除
             keys_to_remove = [
                 k for k in self.l1_cache.keys()
                 if pattern.lower() in k.lower()
             ]
             for k in keys_to_remove:
                 del self.l1_cache[k]
+        elif pattern == "":
+            # 拒绝空字符串模式，防止意外清除所有缓存
+            raise ValueError("Invalidation pattern cannot be empty string")
         else:
-            # 全部清空
+            # 全部清空（显式传入 None 时）
             self.clear()
 
     def clear(self):

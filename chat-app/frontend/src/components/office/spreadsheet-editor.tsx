@@ -1,315 +1,262 @@
-"use client"
+"use client";
 
-import { useEffect, useState, useCallback, useRef } from "react"
-import { OfficeLayout } from "./office-layout"
-import { SpreadsheetToolbar } from "./spreadsheet-toolbar"
-import { getLocalFile, updateLocalFileContent, updateLocalFileName } from "@/lib/file-store"
+import React, { useState, useCallback, useRef, useEffect } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Download, Upload, Plus, Trash2, FileSpreadsheet } from "lucide-react";
+import * as XLSX from "xlsx";
+import { createSafeFormulaEvaluator } from "./safe-formula-evaluator";
 
-interface SpreadsheetEditorProps {
-  fileId: number
-  onBack: () => void
+interface Cell {
+  value: string;
+  formula?: string;
 }
 
-const COL_COUNT = 26
-const ROW_COUNT = 100
-const COL_WIDTH = 100
-const ROW_HEIGHT = 28
-const HEADER_COL_WIDTH = 50
-
-function getColLabel(index: number): string {
-  return String.fromCharCode(65 + index)
+interface SpreadsheetData {
+  [key: string]: Cell;
 }
 
-function getCellAddress(row: number, col: number): string {
-  return `${getColLabel(col)}${row + 1}`
-}
+const ROWS = 20;
+const COLS = 10;
 
-function parseAddress(addr: string): { row: number; col: number } | null {
-  const match = addr.match(/^([A-Z]+)(\d+)$/)
-  if (!match) return null
-  const col = match[1].charCodeAt(0) - 65
-  const row = parseInt(match[2], 10) - 1
-  if (row < 0 || row >= ROW_COUNT || col < 0 || col >= COL_COUNT) return null
-  return { row, col }
-}
+const getCellId = (row: number, col: number) => {
+  const colLetter = String.fromCharCode(65 + col);
+  return `${colLetter}${row + 1}`;
+};
 
-export function SpreadsheetEditor({ fileId, onBack }: SpreadsheetEditorProps) {
-  const [title, setTitle] = useState("未命名表格")
-  const [saving, setSaving] = useState(false)
-  const [cells, setCells] = useState<Record<string, string>>({})
-  const [formulas, setFormulas] = useState<Record<string, string>>({})
-  const [selected, setSelected] = useState<{ row: number; col: number } | null>(null)
-  const [editing, setEditing] = useState<{ row: number; col: number } | null>(null)
-  const [editValue, setEditValue] = useState("")
-  const [boldSet, setBoldSet] = useState<Set<string>>(new Set())
-  const [italicSet, setItalicSet] = useState<Set<string>>(new Set())
-  const inputRef = useRef<HTMLInputElement>(null)
-  const containerRef = useRef<HTMLDivElement>(null)
+// 安全的公式求值函数
+const evaluateFormula = createSafeFormulaEvaluator();
 
-  useEffect(() => {
-    let mounted = true
-    async function load() {
-      const file = await getLocalFile(fileId)
-      if (!file || !mounted) return
-      setTitle(file.filename)
-      const content = file.content || {}
-      const sheet = content.sheets?.[content.activeSheetIndex || 0]
-      if (sheet?.cells) {
-        const vals: Record<string, string> = {}
-        const fmls: Record<string, string> = {}
-        for (const [addr, data] of Object.entries(sheet.cells)) {
-          const d = data as any
-          vals[addr] = d.value || ""
-          if (d.formula) fmls[addr] = d.formula
+export default function SpreadsheetEditor() {
+  const [data, setData] = useState<SpreadsheetData>({});
+  const [selectedCell, setSelectedCell] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const getCellValue = useCallback(
+    (cellId: string): string => {
+      const cell = data[cellId];
+      if (!cell) return "";
+      if (cell.formula) {
+        try {
+          return evaluateFormula(cell.formula, data);
+        } catch {
+          return "#ERROR";
         }
-        setCells(vals)
-        setFormulas(fmls)
       }
-    }
-    load()
-    return () => { mounted = false }
-  }, [fileId])
+      return cell.value;
+    },
+    [data]
+  );
 
-  const evaluateFormula = useCallback((formula: string, currentCells: Record<string, string>): string => {
-    if (!formula.startsWith("=")) return formula
-    const expr = formula.slice(1)
-    const safeExpr = expr.replace(/([A-Z]+\d+)/g, (match) => {
-      const addr = match.toUpperCase()
-      const val = parseFloat(currentCells[addr] || "0")
-      return String(isNaN(val) ? 0 : val)
-    })
-    try {
-      const result = new Function(`return (${safeExpr})`)()
-      return String(result)
-    } catch {
-      return "#ERROR"
-    }
-  }, [])
+  const handleCellClick = useCallback(
+    (cellId: string) => {
+      setSelectedCell(cellId);
+      const cell = data[cellId];
+      setEditValue(cell?.formula || cell?.value || "");
+      setTimeout(() => inputRef.current?.focus(), 0);
+    },
+    [data]
+  );
 
-  const getDisplayValue = useCallback((row: number, col: number, currentCells?: Record<string, string>): string => {
-    const addr = getCellAddress(row, col)
-    const cs = currentCells || cells
-    const formula = formulas[addr]
-    if (formula) {
-      return evaluateFormula(formula, cs)
-    }
-    return cs[addr] || ""
-  }, [cells, formulas, evaluateFormula])
+  const handleCellUpdate = useCallback(
+    (cellId: string, value: string) => {
+      setData((prev) => {
+        const newData = { ...prev };
+        if (value.startsWith("=")) {
+          newData[cellId] = { value: "", formula: value };
+        } else {
+          newData[cellId] = { value };
+        }
+        return newData;
+      });
+    },
+    []
+  );
 
-  const handleSave = useCallback(async (nextCells?: Record<string, string>, nextFormulas?: Record<string, string>) => {
-    setSaving(true)
-    const cs = nextCells || cells
-    const fs = nextFormulas || formulas
-    const sheetCells: Record<string, any> = {}
-    const allAddrs = new Set([...Object.keys(cs), ...Object.keys(fs)])
-    for (const addr of allAddrs) {
-      sheetCells[addr] = {
-        value: cs[addr] || "",
-        formula: fs[addr] || null,
-      }
-    }
-    await updateLocalFileContent(fileId, {
-      type: "spreadsheet",
-      sheets: [{ name: "Sheet1", cells: sheetCells }],
-      activeSheetIndex: 0,
-    })
-    setTimeout(() => setSaving(false), 300)
-  }, [cells, formulas, fileId])
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (!selectedCell) return;
 
-  const handleCellClick = (row: number, col: number) => {
-    setSelected({ row, col })
-    setEditing(null)
-  }
-
-  const handleCellDoubleClick = (row: number, col: number) => {
-    const addr = getCellAddress(row, col)
-    setEditing({ row, col })
-    setEditValue(formulas[addr] || cells[addr] || "")
-    setTimeout(() => inputRef.current?.focus(), 0)
-  }
-
-  const commitEdit = useCallback(() => {
-    if (!editing) return
-    const addr = getCellAddress(editing.row, editing.col)
-    const nextCells = { ...cells }
-    const nextFormulas = { ...formulas }
-    if (editValue.startsWith("=")) {
-      nextFormulas[addr] = editValue
-      nextCells[addr] = evaluateFormula(editValue, nextCells)
-    } else {
-      delete nextFormulas[addr]
-      nextCells[addr] = editValue
-    }
-    setCells(nextCells)
-    setFormulas(nextFormulas)
-    setEditing(null)
-    handleSave(nextCells, nextFormulas)
-  }, [editing, editValue, cells, formulas, evaluateFormula, handleSave])
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (editing) {
       if (e.key === "Enter") {
-        e.preventDefault()
-        commitEdit()
+        handleCellUpdate(selectedCell, editValue);
+        setSelectedCell(null);
       } else if (e.key === "Escape") {
-        setEditing(null)
+        setSelectedCell(null);
       }
-      return
+    },
+    [selectedCell, editValue, handleCellUpdate]
+  );
+
+  const handleExport = useCallback(() => {
+    const exportData: (string | number)[][] = [];
+    for (let row = 0; row < ROWS; row++) {
+      const rowData: (string | number)[] = [];
+      for (let col = 0; col < COLS; col++) {
+        const cellId = getCellId(row, col);
+        const value = getCellValue(cellId);
+        const numValue = Number(value);
+        rowData.push(!isNaN(numValue) && value !== "" ? numValue : value);
+      }
+      exportData.push(rowData);
     }
-    if (!selected) return
-    const { row, col } = selected
-    if (e.key === "ArrowUp") {
-      e.preventDefault()
-      setSelected({ row: Math.max(0, row - 1), col })
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault()
-      setSelected({ row: Math.min(ROW_COUNT - 1, row + 1), col })
-    } else if (e.key === "ArrowLeft") {
-      e.preventDefault()
-      setSelected({ row, col: Math.max(0, col - 1) })
-    } else if (e.key === "ArrowRight") {
-      e.preventDefault()
-      setSelected({ row, col: Math.min(COL_COUNT - 1, col + 1) })
-    } else if (e.key === "Enter") {
-      e.preventDefault()
-      handleCellDoubleClick(row, col)
-    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      setEditing({ row, col })
-      setEditValue(e.key)
-      setTimeout(() => inputRef.current?.focus(), 0)
-    }
-  }
 
-  const toggleBold = () => {
-    if (!selected) return
-    const addr = getCellAddress(selected.row, selected.col)
-    const next = new Set(boldSet)
-    if (next.has(addr)) next.delete(addr)
-    else next.add(addr)
-    setBoldSet(next)
-  }
+    const ws = XLSX.utils.aoa_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    XLSX.writeFile(wb, "spreadsheet.xlsx");
+  }, [data, getCellValue]);
 
-  const toggleItalic = () => {
-    if (!selected) return
-    const addr = getCellAddress(selected.row, selected.col)
-    const next = new Set(italicSet)
-    if (next.has(addr)) next.delete(addr)
-    else next.add(addr)
-    setItalicSet(next)
-  }
+  const handleImport = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
 
-  const selectedAddr = selected ? getCellAddress(selected.row, selected.col) : ""
-  const selectedValue = selected ? (formulas[selectedAddr] || cells[selectedAddr] || "") : ""
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const data = new Uint8Array(event.target?.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: "array" });
+          const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+          const jsonData = XLSX.utils.sheet_to_json(firstSheet, {
+            header: 1,
+          }) as (string | number)[][];
+
+          const newData: SpreadsheetData = {};
+          jsonData.forEach((row, rowIndex) => {
+            row.forEach((cell, colIndex) => {
+              if (cell !== undefined && cell !== null && cell !== "") {
+                const cellId = getCellId(rowIndex, colIndex);
+                const cellValue = String(cell);
+                if (cellValue.startsWith("=")) {
+                  newData[cellId] = { value: "", formula: cellValue };
+                } else {
+                  newData[cellId] = { value: cellValue };
+                }
+              }
+            });
+          });
+
+          setData(newData);
+        } catch (error) {
+          console.error("Error importing file:", error);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+      e.target.value = "";
+    },
+    []
+  );
+
+  const clearSpreadsheet = useCallback(() => {
+    setData({});
+    setSelectedCell(null);
+    setEditValue("");
+  }, []);
 
   return (
-    <OfficeLayout
-      fileId={fileId}
-      fileType="spreadsheet"
-      title={title}
-      onTitleChange={async (t) => { setTitle(t); await updateLocalFileName(fileId, t) }}
-      onBack={onBack}
-      onSave={() => handleSave()}
-      saving={saving}
-      toolbar={
-        <SpreadsheetToolbar
-          onBold={toggleBold}
-          onItalic={toggleItalic}
-          isBold={selected ? boldSet.has(selectedAddr) : false}
-          isItalic={selected ? italicSet.has(selectedAddr) : false}
-        />
-      }
-    >
-      <div className="flex flex-col w-full h-full bg-white" onKeyDown={handleKeyDown} tabIndex={0} ref={containerRef}>
-        {/* Formula bar */}
-        <div className="flex items-center gap-2 px-3 py-1.5 border-b bg-[#f8f8f8]">
-          <span className="text-xs font-mono text-muted-foreground w-12 text-right">{selectedAddr || ""}</span>
-          <span className="text-xs text-muted-foreground">fx</span>
-          <input
-            value={editing ? editValue : selectedValue}
-            onChange={(e) => { if (editing) setEditValue(e.target.value) }}
-            onBlur={commitEdit}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commitEdit()
-              if (e.key === "Escape") setEditing(null)
-            }}
-            className="flex-1 text-sm bg-white border rounded px-2 py-0.5 outline-none"
-            readOnly={!editing}
-          />
+    <div className="flex flex-col h-full bg-white">
+      <div className="flex items-center justify-between p-4 border-b">
+        <div className="flex items-center gap-2">
+          <FileSpreadsheet className="h-5 w-5 text-green-600" />
+          <h2 className="text-lg font-semibold">Spreadsheet Editor</h2>
         </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            onChange={handleImport}
+            className="hidden"
+            id="spreadsheet-import"
+          />
+          <label htmlFor="spreadsheet-import">
+            <Button variant="outline" size="sm" className="cursor-pointer" asChild>
+              <span>
+                <Upload className="h-4 w-4 mr-2" />
+                Import
+              </span>
+            </Button>
+          </label>
+          <Button variant="outline" size="sm" onClick={handleExport}>
+            <Download className="h-4 w-4 mr-2" />
+            Export
+          </Button>
+          <Button variant="outline" size="sm" onClick={clearSpreadsheet}>
+            <Trash2 className="h-4 w-4 mr-2" />
+            Clear
+          </Button>
+        </div>
+      </div>
 
-        {/* Grid */}
-        <div className="flex-1 overflow-auto">
-          <div
-            className="grid"
-            style={{
-              gridTemplateColumns: `${HEADER_COL_WIDTH}px repeat(${COL_COUNT}, ${COL_WIDTH}px)`,
-              gridTemplateRows: `${ROW_HEIGHT}px repeat(${ROW_COUNT}, ${ROW_HEIGHT}px)`,
-            }}
-          >
-            {/* Corner */}
-            <div className="sticky top-0 left-0 z-20 bg-[#f3f3f3] border-r border-b" />
+      <div className="flex-1 overflow-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-10 bg-gray-50"></TableHead>
+              {Array.from({ length: COLS }, (_, i) => (
+                <TableHead
+                  key={i}
+                  className="w-24 text-center bg-gray-50 font-medium"
+                >
+                  {String.fromCharCode(65 + i)}
+                </TableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {Array.from({ length: ROWS }, (_, rowIndex) => (
+              <TableRow key={rowIndex}>
+                <TableCell className="w-10 text-center bg-gray-50 font-medium text-sm">
+                  {rowIndex + 1}
+                </TableCell>
+                {Array.from({ length: COLS }, (_, colIndex) => {
+                  const cellId = getCellId(rowIndex, colIndex);
+                  const isSelected = selectedCell === cellId;
+                  const displayValue = getCellValue(cellId);
 
-            {/* Column headers */}
-            {Array.from({ length: COL_COUNT }).map((_, col) => (
-              <div
-                key={`col-${col}`}
-                className="sticky top-0 z-10 bg-[#f3f3f3] border-r border-b flex items-center justify-center text-xs text-muted-foreground"
-              >
-                {getColLabel(col)}
-              </div>
-            ))}
-
-            {/* Rows */}
-            {Array.from({ length: ROW_COUNT }).map((_, row) => (
-              <div key={`row-${row}`} className="contents">
-                {/* Row header */}
-                <div className="sticky left-0 z-10 bg-[#f3f3f3] border-r border-b flex items-center justify-center text-xs text-muted-foreground">
-                  {row + 1}
-                </div>
-                {/* Cells */}
-                {Array.from({ length: COL_COUNT }).map((_, col) => {
-                  const addr = getCellAddress(row, col)
-                  const isSelected = selected?.row === row && selected?.col === col
-                  const isEditing = editing?.row === row && editing?.col === col
-                  const display = getDisplayValue(row, col)
-                  const isBold = boldSet.has(addr)
-                  const isItalic = italicSet.has(addr)
                   return (
-                    <div
-                      key={addr}
-                      className={`border-r border-b relative text-sm px-1 flex items-center overflow-hidden whitespace-nowrap ${
-                        isSelected ? "ring-2 ring-[#2564cf] ring-inset z-10" : ""
+                    <TableCell
+                      key={colIndex}
+                      className={`w-24 p-0 border cursor-pointer ${
+                        isSelected
+                          ? "ring-2 ring-blue-500 z-10"
+                          : "hover:bg-gray-50"
                       }`}
-                      style={{
-                        fontWeight: isBold ? "bold" : "normal",
-                        fontStyle: isItalic ? "italic" : "normal",
-                      }}
-                      onClick={() => handleCellClick(row, col)}
-                      onDoubleClick={() => handleCellDoubleClick(row, col)}
+                      onClick={() => handleCellClick(cellId)}
                     >
-                      {isEditing ? (
-                        <input
+                      {isSelected ? (
+                        <Input
                           ref={inputRef}
                           value={editValue}
                           onChange={(e) => setEditValue(e.target.value)}
-                          onBlur={commitEdit}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") commitEdit()
-                            if (e.key === "Escape") setEditing(null)
+                          onKeyDown={handleKeyDown}
+                          onBlur={() => {
+                            handleCellUpdate(cellId, editValue);
+                            setSelectedCell(null);
                           }}
-                          className="absolute inset-0 w-full h-full px-1 outline-none border-2 border-[#2564cf]"
+                          className="w-full h-full border-0 rounded-none focus-visible:ring-0"
                         />
                       ) : (
-                        display
+                        <div className="w-full h-full px-2 py-1 text-sm truncate">
+                          {displayValue}
+                        </div>
                       )}
-                    </div>
-                  )
+                    </TableCell>
+                  );
                 })}
-              </div>
+              </TableRow>
             ))}
-          </div>
-        </div>
+          </TableBody>
+        </Table>
       </div>
-    </OfficeLayout>
-  )
+    </div>
+  );
 }

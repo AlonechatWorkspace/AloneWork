@@ -81,7 +81,8 @@ export function DocumentEditor({ fileId, onBack }: DocumentEditorProps) {
   const handleExport = useCallback(() => {
     if (!editor) return
     const html = editor.getHTML()
-    const blob = new Blob([html], { type: "text/html" })
+    const sanitizedHtml = sanitizeExportHtml(html)
+    const blob = new Blob([sanitizedHtml], { type: "text/html" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
@@ -120,7 +121,7 @@ export function DocumentEditor({ fileId, onBack }: DocumentEditorProps) {
 function paragraphsToHtml(paragraphs: any[]): string {
   return paragraphs
     .map((p) => {
-      const align = p.alignment ? ` style="text-align:${p.alignment}"` : ""
+      const align = p.alignment ? ` style="text-align:${escapeHtmlAttribute(p.alignment)}"` : ""
       const runs = p.runs
         .map((r: any) => {
           let tag = "span"
@@ -128,12 +129,12 @@ function paragraphsToHtml(paragraphs: any[]): string {
           if (r.bold) styles += "font-weight:bold;"
           if (r.italic) styles += "font-style:italic;"
           if (r.underline) styles += "text-decoration:underline;"
-          if (r.font_size) styles += `font-size:${r.font_size}pt;`
+          if (r.font_size) styles += `font-size:${escapeHtmlAttribute(String(r.font_size))}pt;`
           const styleAttr = styles ? ` style="${styles}"` : ""
           return `<${tag}${styleAttr}>${escapeHtml(r.text)}</${tag}>`
         })
         .join("")
-      const tag = p.style?.startsWith("Heading") ? `h${p.style.replace("Heading ", "")}` : "p"
+      const tag = p.style?.startsWith("Heading") ? `h${escapeHtmlAttribute(p.style.replace("Heading ", ""))}` : "p"
       return `<${tag}${align}>${runs || escapeHtml(p.text)}</${tag}>`
     })
     .join("")
@@ -143,4 +144,14 @@ function escapeHtml(text: string): string {
   const div = document.createElement("div")
   div.textContent = text
   return div.innerHTML
+}
+
+function escapeHtmlAttribute(value: string): string {
+  if (!value) return ""
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
 }

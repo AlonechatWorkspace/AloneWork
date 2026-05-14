@@ -5,6 +5,7 @@ from sqlalchemy import select, and_, or_, func
 from sqlalchemy.orm import selectinload
 from typing import Optional, List
 import json
+import asyncio
 
 from config import get_settings
 from database import get_db, engine, Base
@@ -20,6 +21,7 @@ from schemas import (
 from auth import get_password_hash, verify_password, create_access_token, get_current_user, get_current_user_optional
 from websocket_manager import manager
 from routers import agent, workspaces, files, mcp_marketplace
+from rate_limiter import RateLimiter
 
 settings = get_settings()
 
@@ -30,12 +32,22 @@ app.include_router(workspaces.router)
 app.include_router(files.router)
 app.include_router(mcp_marketplace.router)
 
+# 配置 CORS - 不允许通配符与 credentials 同时使用
+# 生产环境应该配置具体的允许域名
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # 前端开发服务器地址
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
+)
+
+# 初始化速率限制器
+login_rate_limiter = RateLimiter(
+    redis_url=settings.REDIS_URL,
+    prefix="login_limit",
+    max_requests=5,
+    window_seconds=300,  # 5 分钟内最多 5 次登录尝试
 )
 
 
@@ -53,7 +65,7 @@ async def shutdown():
 async def global_exception_handler(request, exc):
     return {
         "error": "InternalServerError",
-        "message": str(exc),
+        "message": "An internal server error occurred",
         "details": {}
     }
 
@@ -82,6 +94,18 @@ async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
 
 @app.post("/api/auth/login", response_model=Token)
 async def login(login_data: UserLogin, db: AsyncSession = Depends(get_db)):
+    # 速率限制检查
+    allowed, retry_after = await login_rate_limiter.check_limit(login_data.email)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "error": "TooManyRequests",
+                "message": f"Too many login attempts. Please try again after {retry_after} seconds.",
+                "details": {"retry_after": retry_after}
+            }
+        )
+
     result = await db.execute(select(User).where(User.email == login_data.email))
     user = result.scalar_one_or_none()
     if not user or not verify_password(login_data.password, user.hashed_password):
@@ -552,4 +576,4 @@ async def websocket_endpoint(websocket: WebSocket, token: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000)

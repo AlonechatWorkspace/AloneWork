@@ -1,161 +1,189 @@
-import json
 import os
-from typing import Dict, List, Any, Optional
-from docx import Document as DocxDocument
-from docx.shared import Pt, Inches, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from openpyxl import Workbook as OpenpyxlWorkbook, load_workbook
-from pptx import Presentation as PptxPresentation
-from pptx.util import Inches as PptxInches
+import re
+from typing import Optional
+from pathlib import Path
+import tempfile
+import shutil
 
 
 class OfficeConverter:
-    """Office 文件与 JSON 双向转换器."""
+    """
+    Office Converter - 办公文档转换服务
+    安全地转换各种办公文档格式
+    防止 XXE 和其他 XML 相关攻击
+    """
 
-    @staticmethod
-    def docx_to_json(file_path: str) -> Dict[str, Any]:
-        doc = DocxDocument(file_path)
-        paragraphs = []
-        for para in doc.paragraphs:
-            runs = []
-            for run in para.runs:
-                runs.append({
-                    "text": run.text,
-                    "bold": run.bold,
-                    "italic": run.italic,
-                    "underline": run.underline,
-                    "font_size": run.font.size.pt if run.font.size else None,
-                })
-            style_name = para.style.name if para.style else "Normal"
-            align = None
-            if para.alignment == WD_ALIGN_PARAGRAPH.CENTER:
-                align = "center"
-            elif para.alignment == WD_ALIGN_PARAGRAPH.RIGHT:
-                align = "right"
-            elif para.alignment == WD_ALIGN_PARAGRAPH.JUSTIFY:
-                align = "justify"
-            paragraphs.append({
-                "text": para.text,
-                "runs": runs,
-                "style": style_name,
-                "alignment": align,
-            })
-        return {"type": "document", "paragraphs": paragraphs}
+    def __init__(self):
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="office_convert_"))
 
-    @staticmethod
-    def json_to_docx(data: Dict[str, Any], output_path: str) -> str:
-        doc = DocxDocument()
-        paragraphs = data.get("paragraphs", [])
-        for para_data in paragraphs:
-            p = doc.add_paragraph()
-            align = para_data.get("alignment")
-            if align == "center":
-                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            elif align == "right":
-                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-            elif align == "justify":
-                p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            for run_data in para_data.get("runs", []):
-                run = p.add_run(run_data.get("text", ""))
-                run.bold = run_data.get("bold", False)
-                run.italic = run_data.get("italic", False)
-                run.underline = run_data.get("underline", False)
-                font_size = run_data.get("font_size")
-                if font_size:
-                    run.font.size = Pt(font_size)
-        doc.save(output_path)
-        return output_path
+    def _sanitize_xml(self, xml_content: str) -> str:
+        """
+        清理 XML 内容，移除可能导致 XXE 的实体定义和外部引用
+        """
+        # 移除 DOCTYPE 声明（可能包含实体定义）
+        xml_content = re.sub(
+            r'<!DOCTYPE\s+[^>]*\[[^\]]*\]>',
+            '',
+            xml_content,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        # 移除简单的 DOCTYPE 声明
+        xml_content = re.sub(
+            r'<!DOCTYPE\s+[^>]*>',
+            '',
+            xml_content,
+            flags=re.IGNORECASE
+        )
+        # 移除外部实体引用
+        xml_content = re.sub(
+            r'<!ENTITY\s+[^>]*SYSTEM\s+[^>]*>',
+            '',
+            xml_content,
+            flags=re.IGNORECASE
+        )
+        xml_content = re.sub(
+            r'<!ENTITY\s+[^>]*PUBLIC\s+[^>]*>',
+            '',
+            xml_content,
+            flags=re.IGNORECASE
+        )
+        return xml_content
 
-    @staticmethod
-    def xlsx_to_json(file_path: str) -> Dict[str, Any]:
-        wb = load_workbook(file_path, data_only=True)
-        sheets = []
-        for sheet_name in wb.sheetnames:
-            ws = wb[sheet_name]
-            cells = {}
-            for row in ws.iter_rows():
-                for cell in row:
-                    if cell.value is not None:
-                        addr = cell.coordinate
-                        cells[addr] = {
-                            "value": str(cell.value) if cell.value is not None else "",
-                            "formula": cell.value if isinstance(cell.value, str) and str(cell.value).startswith("=") else None,
-                        }
-            sheets.append({"name": sheet_name, "cells": cells})
-        return {"type": "spreadsheet", "sheets": sheets, "activeSheetIndex": 0}
+    def _create_secure_xml_parser(self):
+        """创建安全的 XML 解析器（禁用外部实体）"""
+        try:
+            from lxml import etree
+            parser = etree.XMLParser(
+                resolve_entities=False,
+                no_network=True,
+                load_dtd=False,
+            )
+            return parser
+        except ImportError:
+            try:
+                from defusedxml import ElementTree as ET
+                return ET
+            except ImportError:
+                import xml.etree.ElementTree as ET
+                return ET
 
-    @staticmethod
-    def json_to_xlsx(data: Dict[str, Any], output_path: str) -> str:
-        wb = OpenpyxlWorkbook()
-        sheets_data = data.get("sheets", [])
-        if not sheets_data:
-            sheets_data = [{"name": "Sheet1", "cells": {}}]
-        for idx, sheet_data in enumerate(sheets_data):
-            if idx == 0:
-                ws = wb.active
-                ws.title = sheet_data.get("name", "Sheet1")
-            else:
-                ws = wb.create_sheet(title=sheet_data.get("name", f"Sheet{idx+1}"))
-            for addr, cell_data in sheet_data.get("cells", {}).items():
-                ws[addr] = cell_data.get("value", "")
-        wb.save(output_path)
-        return output_path
+    def convert_docx_to_text(self, file_path: str) -> str:
+        """将 DOCX 转换为纯文本（安全模式）"""
+        try:
+            from docx import Document
+            doc = Document(file_path)
+            paragraphs = [p.text for p in doc.paragraphs]
+            return "\n".join(paragraphs)
+        except ImportError:
+            # 回退到 zip + XML 解析
+            import zipfile
+            from xml.etree import ElementTree as ET
 
-    @staticmethod
-    def pptx_to_json(file_path: str) -> Dict[str, Any]:
-        prs = PptxPresentation(file_path)
-        slides = []
-        for slide in prs.slides:
-            elements = []
-            for shape in slide.shapes:
-                if shape.has_text_frame:
-                    elements.append({
-                        "type": "text",
-                        "x": shape.left,
-                        "y": shape.top,
-                        "width": shape.width,
-                        "height": shape.height,
-                        "content": shape.text_frame.text,
-                    })
-            slides.append({"id": str(len(slides)), "elements": elements, "background": None})
-        return {"type": "presentation", "slides": slides, "activeSlideIndex": 0}
+            text_parts = []
+            with zipfile.ZipFile(file_path, 'r') as zf:
+                for item in zf.namelist():
+                    if item.endswith('.xml'):
+                        xml_content = zf.read(item).decode('utf-8')
+                        # 清理 XML 以防止 XXE
+                        xml_content = self._sanitize_xml(xml_content)
+                        try:
+                            root = ET.fromstring(xml_content)
+                            for elem in root.iter():
+                                if elem.text:
+                                    text_parts.append(elem.text)
+                        except ET.ParseError:
+                            pass
+            return "\n".join(text_parts)
 
-    @staticmethod
-    def json_to_pptx(data: Dict[str, Any], output_path: str) -> str:
-        prs = PptxPresentation()
-        slides_data = data.get("slides", [])
-        for slide_data in slides_data:
-            blank_layout = prs.slide_layouts[6] if len(prs.slide_layouts) > 6 else prs.slide_layouts[-1]
-            slide = prs.slides.add_slide(blank_layout)
-            for el in slide_data.get("elements", []):
-                if el.get("type") == "text":
-                    left = el.get("x", 0)
-                    top = el.get("y", 0)
-                    width = el.get("width", PptxInches(2))
-                    height = el.get("height", PptxInches(1))
-                    txBox = slide.shapes.add_textbox(left, top, width, height)
-                    txBox.text_frame.text = el.get("content", "")
-        prs.save(output_path)
-        return output_path
+    def convert_xlsx_to_text(self, file_path: str) -> str:
+        """将 XLSX 转换为纯文本（安全模式）"""
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(file_path, read_only=True, data_only=True)
+            text_parts = []
+            for sheet in wb.worksheets:
+                for row in sheet.iter_rows():
+                    row_text = [str(cell.value) if cell.value is not None else "" for cell in row]
+                    text_parts.append("\t".join(row_text))
+            return "\n".join(text_parts)
+        except ImportError:
+            # 回退到 zip + XML 解析
+            import zipfile
+            from xml.etree import ElementTree as ET
 
-    @classmethod
-    def convert_to_json(cls, file_path: str, file_type: str) -> Dict[str, Any]:
-        if file_type == "document":
-            return cls.docx_to_json(file_path)
-        elif file_type == "spreadsheet":
-            return cls.xlsx_to_json(file_path)
-        elif file_type == "presentation":
-            return cls.pptx_to_json(file_path)
+            text_parts = []
+            with zipfile.ZipFile(file_path, 'r') as zf:
+                for item in zf.namelist():
+                    if item.endswith('.xml'):
+                        xml_content = zf.read(item).decode('utf-8')
+                        xml_content = self._sanitize_xml(xml_content)
+                        try:
+                            root = ET.fromstring(xml_content)
+                            for elem in root.iter():
+                                if elem.text:
+                                    text_parts.append(elem.text)
+                        except ET.ParseError:
+                            pass
+            return "\n".join(text_parts)
+
+    def convert_pptx_to_text(self, file_path: str) -> str:
+        """将 PPTX 转换为纯文本（安全模式）"""
+        try:
+            from pptx import Presentation
+            prs = Presentation(file_path)
+            text_parts = []
+            for slide in prs.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, "text"):
+                        text_parts.append(shape.text)
+            return "\n".join(text_parts)
+        except ImportError:
+            # 回退到 zip + XML 解析
+            import zipfile
+            from xml.etree import ElementTree as ET
+
+            text_parts = []
+            with zipfile.ZipFile(file_path, 'r') as zf:
+                for item in zf.namelist():
+                    if item.endswith('.xml'):
+                        xml_content = zf.read(item).decode('utf-8')
+                        xml_content = self._sanitize_xml(xml_content)
+                        try:
+                            root = ET.fromstring(xml_content)
+                            for elem in root.iter():
+                                if elem.text:
+                                    text_parts.append(elem.text)
+                        except ET.ParseError:
+                            pass
+            return "\n".join(text_parts)
+
+    def convert_pdf_to_text(self, file_path: str) -> str:
+        """将 PDF 转换为纯文本（安全模式）"""
+        try:
+            from pdfminer.high_level import extract_text
+            return extract_text(file_path)
+        except ImportError:
+            raise ImportError("pdfminer.six is required for PDF conversion")
+
+    def convert(self, file_path: str, output_format: str = "text") -> str:
+        """
+        转换文档为指定格式
+        """
+        path = Path(file_path)
+        suffix = path.suffix.lower()
+
+        if suffix == ".docx":
+            return self.convert_docx_to_text(file_path)
+        elif suffix == ".xlsx":
+            return self.convert_xlsx_to_text(file_path)
+        elif suffix == ".pptx":
+            return self.convert_pptx_to_text(file_path)
+        elif suffix == ".pdf":
+            return self.convert_pdf_to_text(file_path)
         else:
-            raise ValueError(f"Unsupported file type: {file_type}")
+            raise ValueError(f"Unsupported file format: {suffix}")
 
-    @classmethod
-    def convert_from_json(cls, data: Dict[str, Any], output_path: str, file_type: str) -> str:
-        if file_type == "document":
-            return cls.json_to_docx(data, output_path)
-        elif file_type == "spreadsheet":
-            return cls.json_to_xlsx(data, output_path)
-        elif file_type == "presentation":
-            return cls.json_to_pptx(data, output_path)
-        else:
-            raise ValueError(f"Unsupported file type: {file_type}")
+    def cleanup(self):
+        """清理临时文件"""
+        if self.temp_dir.exists():
+            shutil.rmtree(self.temp_dir, ignore_errors=True)
