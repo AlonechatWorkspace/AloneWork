@@ -19,7 +19,7 @@ from schemas import (
 )
 from auth import get_password_hash, verify_password, create_access_token, get_current_user, get_current_user_optional
 from websocket_manager import manager
-from routers import agent, workspaces, files
+from routers import agent, workspaces, files, mcp_marketplace
 
 settings = get_settings()
 
@@ -28,6 +28,7 @@ app = FastAPI(title="ChatApp API", version="1.0.0")
 app.include_router(agent.router)
 app.include_router(workspaces.router)
 app.include_router(files.router)
+app.include_router(mcp_marketplace.router)
 
 app.add_middleware(
     CORSMiddleware,

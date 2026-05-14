@@ -188,3 +188,10 @@ class FileRecord(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     uploader = relationship("User", foreign_keys=[uploader_id])
+
+
+# Import MCP Marketplace models
+from models.mcp_marketplace import MCPServerModel
+
+# Ensure the model is registered with Base metadata
+# This allows Alembic to detect it for migrations
