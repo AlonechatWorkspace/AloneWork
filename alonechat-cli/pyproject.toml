@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alonechat"
-version = "0.1.0"
+version = "0.2.0"
 description = "国产化、终端原生、深度中文优化的AI编程Agent"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "AloneChat Team", email = "team@alonechat.ai"}
+    {name = "AloneChat Team", email = "alonechatworkspace@163.com"}
 ]
-keywords = ["ai", "agent", "coding", "cli", "chinese"]
+keywords = ["ai", "agent", "coding", "cli", "chinese", "deepseek"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -31,7 +31,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "cryptography>=41.0.0",
     "PyYAML>=6.0",
-    "tomli>=2.0.0;python_version<'3.11'",
+    "tomli>=2.0.0",
     "tomli-w>=1.0.0",
 ]
 
@@ -50,15 +50,21 @@ rag = [
     "chromadb>=0.4.0",
     "sentence-transformers>=2.0.0",
 ]
+chinese-nlp = [
+    "jieba>=0.42.0",
+]
+agent-framework = [
+    "agent-framework @ {path = ../agent-framework}",
+]
 
 [project.scripts]
 alonechat = "alonechat.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/alonechat/alonechat"
-Documentation = "https://docs.alonechat.ai"
-Repository = "https://github.com/alonechat/alonechat"
-Issues = "https://github.com/alonechat/alonechat/issues"
+Homepage = "https://github.com/Ryan-178/AloneChatWorkspace"
+Documentation = "https://github.com/Ryan-178/AloneChatWorkspace#readme"
+Repository = "https://github.com/Ryan-178/AloneChatWorkspace"
+Issues = "https://github.com/Ryan-178/AloneChatWorkspace/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

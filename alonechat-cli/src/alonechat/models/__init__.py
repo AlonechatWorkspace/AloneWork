@@ -1,49 +1,79 @@
 """
-模型路由模块
+模型路由模块 / Model Router Module
 
-负责：
-- 多模型支持
-- API调用
-- 本地模型支持
-- 流式输出
+负责 / Responsible for:
+- DeepSeek V4 Flash API调用 / DeepSeek V4 Flash API calls
+- 思考模式支持 / Thinking mode support
+- 多轮对话 / Multi-turn conversation
+- 上下文缓存 / Context caching
 """
 
 import httpx
+import os
 from typing import Any, Generator
-from abc import ABC, abstractmethod
+from pathlib import Path
+from dataclasses import dataclass
 
 from alonechat.config import ConfigManager
 
 
-class BaseModelProvider(ABC):
-    """模型提供商基类"""
+DEEPSEEK_API_BASE = "https://api.deepseek.com/v1"
+DEEPSEEK_MODEL = "deepseek-v4-flash"
+REASONING_EFFORT = "high"
+
+
+@dataclass
+class UsageInfo:
+    """使用量信息 / Usage Info"""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    prompt_cache_hit_tokens: int = 0
+    prompt_cache_miss_tokens: int = 0
     
-    @abstractmethod
+    @property
+    def cache_hit_rate(self) -> float:
+        """缓存命中率 / Cache hit rate"""
+        if self.prompt_tokens == 0:
+            return 0.0
+        return self.prompt_cache_hit_tokens / self.prompt_tokens
+
+
+@dataclass
+class ChatResponse:
+    """聊天响应 / Chat Response"""
+    content: str
+    reasoning_content: str = ""
+    usage: UsageInfo | None = None
+    
+    def __str__(self) -> str:
+        return self.content
+    
+    def to_message(self) -> dict[str, str]:
+        """转换为消息格式 / Convert to message format"""
+        return {"role": "assistant", "content": self.content}
+
+
+class DeepSeekProvider:
+    """
+    DeepSeek V4 Flash 提供商 / DeepSeek V4 Flash Provider
+    
+    固定使用 DeepSeek V4 Flash 模型，启用思考模式 / Fixed to use DeepSeek V4 Flash model with thinking mode
+    """
+    
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.base_url = DEEPSEEK_API_BASE
+        self.model = DEEPSEEK_MODEL
+        self.reasoning_effort = REASONING_EFFORT
+    
     def chat(
         self,
         messages: list[dict[str, str]],
         stream: bool = False,
         **kwargs
-    ) -> str | Generator[str, None, None]:
-        """聊天接口"""
-        pass
-
-
-class DeepSeekProvider(BaseModelProvider):
-    """DeepSeek提供商"""
-    
-    def __init__(self, config: dict[str, Any]):
-        self.api_key = config.get("api_key", "")
-        self.base_url = config.get("base_url", "https://api.deepseek.com/v1")
-        self.model = config.get("model", "deepseek-chat")
-    
-    def chat(
-        self,
-        messages: list[dict[str, str]],
-        stream: bool = False,
-        **kwargs
-    ) -> str | Generator[str, None, None]:
-        """DeepSeek聊天接口"""
+    ) -> str | Generator[str, None, None] | ChatResponse:
+        """聊天接口 / Chat interface"""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -53,115 +83,127 @@ class DeepSeekProvider(BaseModelProvider):
             "model": self.model,
             "messages": messages,
             "stream": stream,
-            **kwargs
+            "reasoning_effort": self.reasoning_effort,
         }
         
-        with httpx.Client(base_url=self.base_url, headers=headers) as client:
+        timeout = httpx.Timeout(120.0, connect=30.0)
+        
+        with httpx.Client(base_url=self.base_url, headers=headers, timeout=timeout) as client:
             if stream:
                 return self._stream_chat(client, data)
             else:
                 response = client.post("/chat/completions", json=data)
                 response.raise_for_status()
-                return response.json()["choices"][0]["message"]["content"]
+                result = response.json()
+                
+                message = result["choices"][0]["message"]
+                content = message.get("content", "")
+                reasoning_content = message.get("reasoning_content", "")
+                
+                usage_data = result.get("usage", {})
+                usage = UsageInfo(
+                    prompt_tokens=usage_data.get("prompt_tokens", 0),
+                    completion_tokens=usage_data.get("completion_tokens", 0),
+                    total_tokens=usage_data.get("total_tokens", 0),
+                    prompt_cache_hit_tokens=usage_data.get("prompt_cache_hit_tokens", 0),
+                    prompt_cache_miss_tokens=usage_data.get("prompt_cache_miss_tokens", 0),
+                )
+                
+                return ChatResponse(
+                    content=content,
+                    reasoning_content=reasoning_content,
+                    usage=usage,
+                )
     
     def _stream_chat(
         self,
         client: httpx.Client,
         data: dict[str, Any]
     ) -> Generator[str, None, None]:
-        """流式聊天"""
+        """流式聊天 / Stream chat"""
+        import json
+        
         with client.stream("POST", "/chat/completions", json=data) as response:
             for line in response.iter_lines():
                 if line.startswith("data: "):
                     if line == "data: [DONE]":
                         break
-                    import json
-                    chunk = json.loads(line[6:])
-                    if content := chunk["choices"][0]["delta"].get("content"):
-                        yield content
-
-
-class OllamaProvider(BaseModelProvider):
-    """Ollama本地模型提供商"""
-    
-    def __init__(self, config: dict[str, Any]):
-        self.base_url = config.get("base_url", "http://localhost:11434")
-        self.model = config.get("model", "deepseek-coder:6.7b")
-    
-    def chat(
-        self,
-        messages: list[dict[str, str]],
-        stream: bool = False,
-        **kwargs
-    ) -> str | Generator[str, None, None]:
-        """Ollama聊天接口"""
-        data = {
-            "model": self.model,
-            "messages": messages,
-            "stream": stream,
-        }
-        
-        with httpx.Client(base_url=self.base_url) as client:
-            if stream:
-                return self._stream_chat(client, data)
-            else:
-                response = client.post("/api/chat", json=data)
-                response.raise_for_status()
-                return response.json()["message"]["content"]
-    
-    def _stream_chat(
-        self,
-        client: httpx.Client,
-        data: dict[str, Any]
-    ) -> Generator[str, None, None]:
-        """流式聊天"""
-        with client.stream("POST", "/api/chat", json=data) as response:
-            for line in response.iter_lines():
-                import json
-                chunk = json.loads(line)
-                if content := chunk.get("message", {}).get("content"):
-                    yield content
+                    try:
+                        chunk = json.loads(line[6:])
+                        delta = chunk["choices"][0]["delta"]
+                        
+                        if reasoning := delta.get("reasoning_content"):
+                            yield f"[思考] {reasoning}"
+                        
+                        if content := delta.get("content"):
+                            yield content
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
 
 
 class ModelRouter:
-    """模型路由器"""
+    """
+    模型路由器 / Model Router
+    
+    固定使用 DeepSeek V4 Flash，启用思考模式 / Fixed to use DeepSeek V4 Flash with thinking mode
+    """
     
     def __init__(self, config: dict[str, Any]):
         self.config = config
-        self.providers = self._init_providers()
+        self._provider: DeepSeekProvider | None = None
     
-    def _init_providers(self) -> dict[str, BaseModelProvider]:
-        """初始化提供商"""
-        providers = {}
-        provider_configs = self.config.get("model", {}).get("providers", {})
+    def _get_api_key(self) -> str:
+        """获取API密钥 / Get API key"""
+        env_key = os.getenv("DEEPSEEK_API_KEY")
+        if env_key:
+            return env_key
         
-        for name, provider_config in provider_configs.items():
-            if name == "deepseek":
-                providers[name] = DeepSeekProvider(provider_config)
-            elif name == "ollama":
-                providers[name] = OllamaProvider(provider_config)
+        config_path = Path.home() / ".alonechat" / ".alonechat_key"
+        if config_path.exists():
+            config_manager = ConfigManager()
+            encrypted_key = config_path.read_text(encoding="utf-8")
+            return config_manager.decrypt_api_key(encrypted_key)
         
-        return providers
+        raise ValueError("API密钥未配置 / API key not configured. Please run: alonechat init")
+    
+    def _get_provider(self) -> DeepSeekProvider:
+        """获取提供商 / Get provider"""
+        if self._provider is None:
+            api_key = self._get_api_key()
+            self._provider = DeepSeekProvider(api_key)
+        return self._provider
     
     def chat(
         self,
-        model: str,
-        messages: list[dict[str, str]],
+        model: str | None = None,
+        messages: list[dict[str, str]] | None = None,
         stream: bool = False,
         **kwargs
-    ) -> str | Generator[str, None, None]:
-        """
-        聊天接口
+    ) -> str | Generator[str, None, None] | ChatResponse:
+        """聊天接口 / Chat interface"""
+        if messages is None:
+            messages = []
         
-        Args:
-            model: 模型名称
-            messages: 消息列表
-            stream: 是否流式输出
-            
-        Returns:
-            响应内容
-        """
-        if model not in self.providers:
-            raise ValueError(f"不支持的模型: {model}")
-        
-        return self.providers[model].chat(messages, stream, **kwargs)
+        provider = self._get_provider()
+        return provider.chat(messages, stream, **kwargs)
+    
+    def stream_chat(
+        self,
+        messages: list[dict[str, str]],
+        **kwargs
+    ) -> Generator[str, None, None]:
+        """流式聊天 / Stream chat"""
+        result = self.chat(messages=messages, stream=True, **kwargs)
+        if isinstance(result, Generator):
+            yield from result
+    
+    def chat_with_reasoning(
+        self,
+        messages: list[dict[str, str]],
+        **kwargs
+    ) -> ChatResponse:
+        """带思考的聊天 / Chat with reasoning"""
+        result = self.chat(messages=messages, stream=False, **kwargs)
+        if isinstance(result, ChatResponse):
+            return result
+        return ChatResponse(content=str(result))

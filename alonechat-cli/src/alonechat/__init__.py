@@ -8,9 +8,9 @@ AloneChat CLI - 国产化、终端原生、深度中文优化的AI编程Agent
 - 离线支持：支持本地模型，完全离线可用
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "AloneChat Team"
-__email__ = "team@alonechat.ai"
+__email__ = "alonechatworkspace@163.com"
 
 from alonechat.cli import main
 

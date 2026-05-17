@@ -2,12 +2,20 @@
 Skills市场接口 - Skills Marketplace
 管理Skills的安装、卸载、搜索等
 支持从远程仓库（GitHub/skills.sh）安装
+
+增强功能 / Enhanced Features:
+- 按名称、描述、市场过滤 / Filter by name, description, marketplace
+- 多条件组合搜索 / Multi-condition combined search
+- 排序和分页 / Sorting and pagination
+
+版本 / Version: 2.0.73
 """
 import shutil
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from pathlib import Path
 from pydantic import BaseModel
+from enum import Enum
 
 from agent_framework.tools.skills_registry import SkillsRegistry, SkillMetadata
 from agent_framework.tools.skills_sh_client import (
@@ -15,6 +23,28 @@ from agent_framework.tools.skills_sh_client import (
     GitHubUrlParser,
     RemoteSkill,
 )
+
+
+class SearchFilter(BaseModel):
+    """搜索过滤器 / Search filter"""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    tags: Optional[List[str]] = None
+    author: Optional[str] = None
+    marketplace: Optional[str] = None
+    min_rating: Optional[float] = None
+    max_rating: Optional[float] = None
+    enabled_only: bool = True
+
+
+class SortBy(str, Enum):
+    """排序方式 / Sort by"""
+    NAME = "name"
+    RATING = "rating"
+    INSTALLS = "installs"
+    UPDATED = "updated"
+    CREATED = "created"
 
 
 class SkillRating(BaseModel):
@@ -26,7 +56,15 @@ class SkillRating(BaseModel):
 
 
 class SkillsMarketplace:
-    """Skills市场"""
+    """
+    Skills市场 / Skills Marketplace
+    
+    增强功能 / Enhanced Features:
+    - advanced_search(): 高级搜索 / Advanced search
+    - search_by_name(): 按名称搜索 / Search by name
+    - search_by_description(): 按描述搜索 / Search by description
+    - search_by_marketplace(): 按市场搜索 / Search by marketplace
+    """
     
     def __init__(self, registry: SkillsRegistry, skills_dir: Optional[Path] = None):
         self.registry = registry
@@ -35,6 +73,7 @@ class SkillsMarketplace:
         self._remote_client = SkillsShClient()
         self._skills_dir = skills_dir or Path.home() / ".skills"
         self._skills_dir.mkdir(parents=True, exist_ok=True)
+        self._marketplaces: Dict[str, Dict[str, Any]] = {}
     
     def list_skills(
         self,
@@ -82,6 +121,275 @@ class SkillsMarketplace:
             }
             for metadata in results
         ]
+    
+    def advanced_search(
+        self,
+        filter: Optional[SearchFilter] = None,
+        sort_by: SortBy = SortBy.NAME,
+        reverse: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+        **kwargs
+    ) -> List[Dict[str, Any]]:
+        """
+        高级搜索 / Advanced search
+        
+        支持多条件组合搜索、排序和分页 / Supports multi-condition search, sorting and pagination
+        
+        Args:
+            filter: 搜索过滤器 / Search filter
+            sort_by: 排序方式 / Sort by
+            reverse: 是否倒序 / Whether reverse
+            limit: 结果数量限制 / Result limit
+            offset: 偏移量 / Offset
+            **kwargs: 直接指定过滤条件 / Direct filter conditions
+        
+        Returns:
+            搜索结果列表 / Search results
+        """
+        if filter is None:
+            filter = SearchFilter(**kwargs)
+        
+        all_skills = self.registry.list()
+        results = []
+        
+        for metadata in all_skills:
+            if filter.enabled_only and not metadata.enabled:
+                continue
+            
+            if filter.name and filter.name.lower() not in metadata.name.lower():
+                continue
+            
+            if filter.description and filter.description.lower() not in metadata.description.lower():
+                continue
+            
+            if filter.category and metadata.category != filter.category:
+                continue
+            
+            if filter.tags:
+                if not any(tag in metadata.tags for tag in filter.tags):
+                    continue
+            
+            if filter.author and filter.author.lower() not in metadata.author.lower():
+                continue
+            
+            rating = self._ratings.get(metadata.name, SkillRating(
+                skill_name=metadata.name,
+                rating=0.0,
+                reviews=0,
+                comments=[],
+            )).rating
+            
+            if filter.min_rating is not None and rating < filter.min_rating:
+                continue
+            
+            if filter.max_rating is not None and rating > filter.max_rating:
+                continue
+            
+            skill_info = metadata.model_dump()
+            skill_info["rating"] = rating
+            skill_info["installed"] = metadata.name in self._installed
+            
+            if filter.marketplace:
+                installed_info = self._installed.get(metadata.name, {})
+                source = installed_info.get("source", "")
+                if filter.marketplace.lower() not in source.lower():
+                    continue
+            
+            results.append(skill_info)
+        
+        results = self._sort_results(results, sort_by, reverse)
+        
+        return results[offset:offset + limit]
+    
+    def _sort_results(
+        self,
+        results: List[Dict[str, Any]],
+        sort_by: SortBy,
+        reverse: bool
+    ) -> List[Dict[str, Any]]:
+        """排序结果 / Sort results"""
+        key_map = {
+            SortBy.NAME: lambda x: x.get("name", ""),
+            SortBy.RATING: lambda x: x.get("rating", 0),
+            SortBy.INSTALLS: lambda x: x.get("installs", 0),
+            SortBy.UPDATED: lambda x: x.get("updated_at", ""),
+            SortBy.CREATED: lambda x: x.get("created_at", ""),
+        }
+        
+        key_func = key_map.get(sort_by, key_map[SortBy.NAME])
+        return sorted(results, key=key_func, reverse=reverse)
+    
+    def search_by_name(
+        self,
+        name: str,
+        exact: bool = False,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """
+        按名称搜索 / Search by name
+        
+        Args:
+            name: 名称关键词 / Name keyword
+            exact: 是否精确匹配 / Whether exact match
+            limit: 结果数量限制 / Result limit
+        
+        Returns:
+            搜索结果 / Search results
+        """
+        filter = SearchFilter(enabled_only=False)
+        all_skills = self.registry.list()
+        results = []
+        
+        for metadata in all_skills:
+            if exact:
+                if metadata.name != name:
+                    continue
+            else:
+                if name.lower() not in metadata.name.lower():
+                    continue
+            
+            skill_info = metadata.model_dump()
+            skill_info["rating"] = self._ratings.get(metadata.name, SkillRating(
+                skill_name=metadata.name,
+                rating=0.0,
+                reviews=0,
+                comments=[],
+            )).rating
+            results.append(skill_info)
+        
+        return results[:limit]
+    
+    def search_by_description(
+        self,
+        description: str,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """
+        按描述搜索 / Search by description
+        
+        Args:
+            description: 描述关键词 / Description keyword
+            limit: 结果数量限制 / Result limit
+        
+        Returns:
+            搜索结果 / Search results
+        """
+        return self.advanced_search(
+            filter=SearchFilter(description=description, enabled_only=False),
+            limit=limit,
+        )
+    
+    def search_by_marketplace(
+        self,
+        marketplace: str,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """
+        按市场搜索 / Search by marketplace
+        
+        搜索从特定市场安装的技能 / Search skills installed from specific marketplace
+        
+        Args:
+            marketplace: 市场名称（如 github, skills.sh）/ Marketplace name
+            limit: 结果数量限制 / Result limit
+        
+        Returns:
+            搜索结果 / Search results
+        """
+        results = []
+        
+        for name, info in self._installed.items():
+            source = info.get("source", "")
+            if marketplace.lower() in source.lower():
+                skill = self.registry.get(name)
+                if skill:
+                    skill_info = skill.metadata.model_dump()
+                    skill_info["rating"] = self._ratings.get(name, SkillRating(
+                        skill_name=name,
+                        rating=0.0,
+                        reviews=0,
+                        comments=[],
+                    )).rating
+                    skill_info["installed"] = True
+                    skill_info["install_info"] = info
+                    results.append(skill_info)
+        
+        return results[:limit]
+    
+    def search_combined(
+        self,
+        query: str,
+        search_in: List[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """
+        组合搜索 / Combined search
+        
+        同时在名称、描述、标签中搜索 / Search in name, description, tags simultaneously
+        
+        Args:
+            query: 搜索关键词 / Search query
+            search_in: 搜索范围（name, description, tags）/ Search scope
+            limit: 结果数量限制 / Result limit
+        
+        Returns:
+            搜索结果 / Search results
+        """
+        if search_in is None:
+            search_in = ["name", "description", "tags"]
+        
+        all_skills = self.registry.list()
+        results = []
+        query_lower = query.lower()
+        
+        for metadata in all_skills:
+            score = 0
+            
+            if "name" in search_in and query_lower in metadata.name.lower():
+                score += 10
+            
+            if "description" in search_in and query_lower in metadata.description.lower():
+                score += 5
+            
+            if "tags" in search_in:
+                for tag in metadata.tags:
+                    if query_lower in tag.lower():
+                        score += 3
+            
+            if score > 0:
+                skill_info = metadata.model_dump()
+                skill_info["rating"] = self._ratings.get(metadata.name, SkillRating(
+                    skill_name=metadata.name,
+                    rating=0.0,
+                    reviews=0,
+                    comments=[],
+                )).rating
+                skill_info["search_score"] = score
+                results.append(skill_info)
+        
+        results.sort(key=lambda x: x.get("search_score", 0), reverse=True)
+        
+        return results[:limit]
+    
+    def register_marketplace(self, name: str, url: str, **kwargs) -> None:
+        """
+        注册市场 / Register marketplace
+        
+        Args:
+            name: 市场名称 / Marketplace name
+            url: 市场URL / Marketplace URL
+            **kwargs: 其他配置 / Other config
+        """
+        self._marketplaces[name] = {
+            "name": name,
+            "url": url,
+            **kwargs,
+        }
+    
+    def list_marketplaces(self) -> List[Dict[str, Any]]:
+        """列出所有市场 / List all marketplaces"""
+        return list(self._marketplaces.values())
     
     def get_details(self, name: str) -> Optional[Dict[str, Any]]:
         """获取Skill详情"""

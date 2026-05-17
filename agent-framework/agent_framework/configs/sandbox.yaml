@@ -6,6 +6,13 @@ default:
   default_permissions:
     - read
     - write
+  allowed_patterns:
+    - "python *"
+    - "python3 *"
+    - "node *"
+    - "ls *"
+    - "cat *"
+    - "echo *"
 
 mtc:
   max_memory_mb: 256

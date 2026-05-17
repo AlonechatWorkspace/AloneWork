@@ -64,6 +64,8 @@ tracing:
 # MCP配置
 mcp:
   enabled: true
+  lazy_load_tools: false
+  auto_lazy_load_threshold: 0.1
   servers:
     - name: "filesystem"
       command: "npx"
@@ -72,6 +74,7 @@ mcp:
       auto_start: false
       description: "文件系统访问工具"
       timeout: 30
+      transport: "stdio"
     - name: "brave-search"
       command: "npx"
       args: ["-y", "@modelcontextprotocol/server-brave-search"]
@@ -80,6 +83,26 @@ mcp:
       auto_start: false
       description: "Brave搜索工具"
       timeout: 30
+      transport: "stdio"
+    - name: "slack-example"
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-slack"]
+      env: {}
+      auto_start: false
+      description: "Slack MCP服务器（OAuth示例）"
+      timeout: 30
+      transport: "stdio"
+      client_id: "${SLACK_CLIENT_ID}"
+      client_secret: "${SLACK_CLIENT_SECRET}"
+    - name: "sse-example"
+      command: ""
+      args: []
+      env: {}
+      auto_start: false
+      description: "SSE传输示例"
+      timeout: 30
+      transport: "sse"
+      url: "http://localhost:3001/mcp"
   default_timeout: 30
   max_concurrent_calls: 10
   auto_register_tools: true

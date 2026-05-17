@@ -412,10 +412,134 @@ async def get_call_history(
     return CallHistoryResponse(calls=history, total=len(history))
 
 
+@router.get("/servers/{server_id}/resources")
+async def get_server_resources(
+    server_id: str,
+    manager: MCPManager = Depends(get_manager),
+):
+    """Get resources provided by a server."""
+    server = manager.get_server(server_id)
+
+    if not server:
+        raise HTTPException(status_code=404, detail=f"Server not found: {server_id}")
+
+    return {
+        "resources": [
+            {
+                "uri": r.uri,
+                "name": r.name,
+                "description": r.description,
+                "mime_type": r.mime_type,
+            }
+            for r in server.resources
+        ],
+        "templates": [
+            {
+                "uri_template": t.uri_template,
+                "name": t.name,
+                "description": t.description,
+                "mime_type": t.mime_type,
+            }
+            for t in server.resource_templates
+        ],
+    }
+
+
+@router.get("/servers/{server_id}/instructions")
+async def get_server_instructions(
+    server_id: str,
+    manager: MCPManager = Depends(get_manager),
+):
+    """Get server instructions."""
+    instructions = manager.get_server_instructions(server_id)
+
+    if not manager.get_server(server_id):
+        raise HTTPException(status_code=404, detail=f"Server not found: {server_id}")
+
+    return {
+        "server_id": server_id,
+        "instructions": instructions,
+    }
+
+
+@router.get("/resources/search")
+async def search_resources(
+    query: str = Query(..., description="Search query"),
+    manager: MCPManager = Depends(get_manager),
+):
+    """Search resources across all servers (@-mention support)."""
+    results = manager.search_resources(query)
+
+    return {
+        "results": [
+            {
+                "server_name": server_name,
+                "resource": {
+                    "uri": r.uri,
+                    "name": r.name,
+                    "description": r.description,
+                    "mime_type": r.mime_type,
+                },
+            }
+            for server_name, r in results
+        ],
+        "total": len(results),
+    }
+
+
+@router.post("/servers/{server_id}/check-lazy-load")
+async def check_lazy_load(
+    server_id: str,
+    context_window: int = Query(100000, description="Estimated context window size"),
+    manager: MCPManager = Depends(get_manager),
+):
+    """Check if tool descriptions exceed lazy-load threshold."""
+    if not manager.get_server(server_id):
+        raise HTTPException(status_code=404, detail=f"Server not found: {server_id}")
+
+    deferred = await manager.check_and_lazy_load_tools(server_id, context_window)
+
+    return {
+        "server_id": server_id,
+        "lazy_load_deferred": deferred,
+    }
+
+
+@router.get("/project")
+async def get_project_scope():
+    """Get project-scoped MCP configuration."""
+    from agent_framework.deepseek_optimization.mcp_marketplace.config import (
+        discover_project_mcp_json,
+        load_project_mcp_json,
+    )
+
+    path = discover_project_mcp_json()
+
+    if not path:
+        return {"found": False, "path": None, "servers": []}
+
+    servers = load_project_mcp_json(path)
+    return {
+        "found": True,
+        "path": path,
+        "servers": [
+            {
+                "name": s.name,
+                "command": s.command,
+                "args": s.args,
+                "transport": s.transport,
+                "url": s.url,
+                "client_id": s.client_id,
+            }
+            for s in servers
+        ],
+    }
+
+
 def create_mcp_api(app, manager: Optional[MCPManager] = None):
     """
     Create and attach MCP API to a FastAPI app.
-    
+
     Args:
         app: FastAPI application
         manager: Optional MCP manager instance
@@ -427,5 +551,5 @@ def create_mcp_api(app, manager: Optional[MCPManager] = None):
             auto_register_tools=getattr(manager, 'auto_register_tools', True),
             default_timeout=getattr(manager, 'default_timeout', 30.0),
         )
-    
+
     app.include_router(router)

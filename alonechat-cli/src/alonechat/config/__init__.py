@@ -43,7 +43,19 @@ class ConfigManager:
         
         使用机器特定的信息生成密钥，确保密钥的唯一性
         """
-        machine_id = f"{os.uname().nodename}-{os.getuid() if hasattr(os, 'getuid') else 0}"
+        import platform
+        
+        try:
+            node_name = platform.node()
+        except Exception:
+            node_name = "alonechat-machine"
+        
+        try:
+            user_id = os.getuid() if hasattr(os, 'getuid') else 0
+        except Exception:
+            user_id = 0
+        
+        machine_id = f"{node_name}-{user_id}"
         
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),

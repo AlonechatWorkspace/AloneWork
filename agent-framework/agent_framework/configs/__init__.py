@@ -386,6 +386,52 @@ def get_intent_config() -> IntentClarificationConfig:
     return IntentClarificationConfig()
 
 
+class PermissionsConfig:
+    """权限规则配置"""
+    
+    _instance: Optional["PermissionsConfig"] = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._config = load_yaml_config("permissions.yaml")
+        return cls._instance
+    
+    @property
+    def allowed_tools(self) -> list:
+        return self._config.get("allowed_tools", [])
+    
+    @property
+    def denied_tools(self) -> list:
+        return self._config.get("denied_tools", [])
+    
+    @property
+    def rules(self) -> list:
+        return self._config.get("rules", [])
+    
+    @property
+    def default_mode(self) -> str:
+        return self._config.get("default_mode", "default")
+    
+    @property
+    def tool_redirect_patterns(self) -> dict:
+        return self._config.get("tool_redirect_patterns", {})
+    
+    def get(self, key: str, default=None):
+        return self._config.get(key, default)
+    
+    @classmethod
+    def reload(cls) -> "PermissionsConfig":
+        reload_config("permissions.yaml")
+        cls._instance = None
+        return cls()
+
+
 def get_skills_config() -> SkillsConfig:
     """获取技能配置"""
     return SkillsConfig()
+
+
+def get_permissions_config() -> PermissionsConfig:
+    """获取权限规则配置"""
+    return PermissionsConfig()
