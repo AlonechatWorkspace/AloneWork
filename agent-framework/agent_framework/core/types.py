@@ -155,3 +155,115 @@ class TaskPriority(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
+
+
+class AgentRole(str, Enum):
+    """
+    Agent角色枚举 - Agent Role Enum
+    定义多Agent协作中的角色类型（Mavis架构）
+    Defines role types in multi-agent collaboration (Mavis architecture)
+    
+    LEADER: 统筹、规划、调度、聚合 / Orchestrates, plans, dispatches, aggregates
+    WORKER: 执行具体任务 / Executes specific tasks
+    VERIFIER: 验收、质量门禁 / Validates, quality gate
+    """
+    LEADER = "leader"
+    WORKER = "worker"
+    VERIFIER = "verifier"
+
+
+class RoleConfig(BaseModel):
+    """
+    角色配置 - Role Configuration
+    配置特定角色的参数和能力
+    Configures parameters and capabilities for a specific role
+    """
+    role: AgentRole = Field(..., description="角色类型 / Role type")
+    capabilities: List[str] = Field(default_factory=list, description="角色能力列表 / Role capabilities list")
+    tools: List[str] = Field(default_factory=list, description="可用工具列表 / Available tools list")
+    max_retries: int = Field(default=3, description="最大重试次数 / Maximum retry count")
+    timeout: int = Field(default=300, description="超时时间(秒) / Timeout in seconds")
+    model_id: Optional[str] = Field(default=None, description="使用的模型ID / Model ID to use")
+    system_prompt_template: Optional[str] = Field(default=None, description="系统提示词模板 / System prompt template")
+    priority: TaskPriority = Field(default=TaskPriority.MEDIUM, description="任务优先级 / Task priority")
+
+
+class WorkerState(str, Enum):
+    """
+    Worker状态枚举 - Worker State Enum
+    定义Worker在Team Engine中的生命周期状态
+    Defines Worker lifecycle states in Team Engine
+    """
+    PENDING = "pending"
+    PRODUCING = "producing"
+    VERIFYING = "verifying"
+    DONE = "done"
+    RETRY = "retry"
+    FAILED = "failed"
+
+
+class TeamPhase(str, Enum):
+    """
+    Team阶段枚举 - Team Phase Enum
+    定义Team执行的主要阶段
+    Defines main phases of Team execution
+    """
+    PLANNING = "planning"
+    DISPATCHING = "dispatching"
+    EXECUTING = "executing"
+    VERIFYING = "verifying"
+    AGGREGATING = "aggregating"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class SubTask(BaseModel):
+    """
+    子任务模型 - SubTask Model
+    表示由Leader分配给Worker的子任务
+    Represents a subtask assigned by Leader to Worker
+    """
+    id: str = Field(..., description="子任务ID / Subtask ID")
+    description: str = Field(..., description="任务描述 / Task description")
+    assigned_to: Optional[str] = Field(default=None, description="分配给的Worker ID / Assigned Worker ID")
+    status: WorkerState = Field(default=WorkerState.PENDING, description="任务状态 / Task status")
+    priority: TaskPriority = Field(default=TaskPriority.MEDIUM, description="优先级 / Priority")
+    dependencies: List[str] = Field(default_factory=list, description="依赖的子任务ID / Dependent subtask IDs")
+    result: Optional[Any] = Field(default=None, description="执行结果 / Execution result")
+    error: Optional[str] = Field(default=None, description="错误信息 / Error message")
+    retry_count: int = Field(default=0, description="重试次数 / Retry count")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据 / Metadata")
+
+
+class VerificationResult(BaseModel):
+    """
+    验证结果模型 - Verification Result Model
+    表示Verifier对Worker输出的验证结果
+    Represents Verifier's validation result of Worker output
+    """
+    subtask_id: str = Field(..., description="子任务ID / Subtask ID")
+    passed: bool = Field(..., description="是否通过 / Whether passed")
+    score: float = Field(default=0.0, description="质量分数(0-1) / Quality score (0-1)")
+    feedback: str = Field(default="", description="反馈信息 / Feedback message")
+    issues: List[str] = Field(default_factory=list, description="问题列表 / Issues list")
+    suggestions: List[str] = Field(default_factory=list, description="改进建议 / Improvement suggestions")
+    verifier_id: str = Field(..., description="Verifier ID")
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class TeamState(BaseModel):
+    """
+    Team状态模型 - Team State Model
+    表示整个Team的当前状态
+    Represents the current state of the entire Team
+    """
+    team_id: str = Field(..., description="Team ID")
+    phase: TeamPhase = Field(default=TeamPhase.PLANNING, description="当前阶段 / Current phase")
+    leader_state: WorkerState = Field(default=WorkerState.PENDING, description="Leader状态 / Leader state")
+    workers: Dict[str, WorkerState] = Field(default_factory=dict, description="Worker状态映射 / Worker state mapping")
+    verifiers: Dict[str, WorkerState] = Field(default_factory=dict, description="Verifier状态映射 / Verifier state mapping")
+    subtasks: Dict[str, SubTask] = Field(default_factory=dict, description="子任务映射 / Subtask mapping")
+    results: Dict[str, Any] = Field(default_factory=dict, description="结果映射 / Results mapping")
+    errors: List[str] = Field(default_factory=list, description="错误列表 / Errors list")
+    start_time: datetime = Field(default_factory=datetime.utcnow, description="开始时间 / Start time")
+    end_time: Optional[datetime] = Field(default=None, description="结束时间 / End time")

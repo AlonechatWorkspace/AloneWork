@@ -402,10 +402,10 @@ def plan_task(
     
     task = Task(
         id="",
-        name=task_description,
         description=task_description,
+        type="generic",
         priority=0,
-        metadata={"complexity": 2.0},
+        metadata={"complexity": 2.0, "name": task_description},
     )
     
     strategy_enum = DecompositionStrategy(strategy)
@@ -419,6 +419,7 @@ def plan_task(
     
     console.print(f"\n[bold]执行计划 / Execution Plan:[/bold]")
     console.print(f"名称: {plan.name}")
+    console.print(f"描述: {plan.description}")
     console.print(f"策略: {plan.strategy.value}")
     console.print(f"步骤数: {len(plan.steps)}")
     

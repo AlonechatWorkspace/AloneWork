@@ -1,11 +1,18 @@
 import asyncio
 import os
-import resource
 import tempfile
-import signal
+import sys
 from typing import List, Optional
 from dataclasses import dataclass
 from pathlib import Path
+
+# Unix-specific modules, not available on Windows
+if sys.platform != "win32":
+    import resource
+    import signal
+else:
+    resource = None
+    signal = None
 
 
 @dataclass
@@ -98,7 +105,9 @@ class SubprocessSandbox:
                 raise ValueError(f"Dangerous flag '{arg}' is not allowed")
 
     def _setup_resource_limits(self):
-        """设置资源限制"""
+        """设置资源限制（仅Unix）"""
+        if resource is None:
+            return
         # 限制 CPU 时间
         resource.setrlimit(
             resource.RLIMIT_CPU,
@@ -127,7 +136,7 @@ class SubprocessSandbox:
         )
 
     def _preexec_fn(self):
-        """子进程启动前执行的函数"""
+        """子进程启动前执行的函数（仅Unix）"""
         self._setup_resource_limits()
         # 切换到沙箱工作目录
         os.chdir(self.allowed_working_dir)
@@ -140,20 +149,22 @@ class SubprocessSandbox:
         self._validate_command(cmd_list)
 
         try:
+            # Windows doesn't support preexec_fn
+            kwargs = {
+                "stdout": asyncio.subprocess.PIPE,
+                "stderr": asyncio.subprocess.PIPE,
+                "cwd": self.allowed_working_dir,
+                "env": {
+                    "PATH": os.environ.get("PATH", ""),
+                    "HOME": self.allowed_working_dir,
+                    "TMPDIR": self.allowed_working_dir,
+                },
+            }
+            if sys.platform != "win32":
+                kwargs["preexec_fn"] = self._preexec_fn
+
             proc = await asyncio.wait_for(
-                asyncio.create_subprocess_exec(
-                    *cmd_list,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    preexec_fn=self._preexec_fn,
-                    cwd=self.allowed_working_dir,
-                    # 限制环境变量
-                    env={
-                        "PATH": "/usr/bin:/bin",
-                        "HOME": self.allowed_working_dir,
-                        "TMPDIR": self.allowed_working_dir,
-                    },
-                ),
+                asyncio.create_subprocess_exec(*cmd_list, **kwargs),
                 timeout=self.max_wall_time_seconds,
             )
 

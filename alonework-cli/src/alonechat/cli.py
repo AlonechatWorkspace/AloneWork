@@ -199,7 +199,6 @@ def setup_cli_enhancements(
 @click.option("--show-thinking", is_flag=True, help="启用Ctrl+O实时显示思维块 / Enable Ctrl+O live thinking display (v2.1.0)")
 @click.option("--no-ime", is_flag=True, help="禁用IME输入法支持 / Disable IME input support (v2.0.68)")
 @click.option("--mode", "interaction_mode", type=click.Choice(["plan", "agent", "yolo"]), default="agent", help="交互模式 (plan/agent/yolo) / Interaction mode (v0.3.0)")
-@click.argument("query", required=False)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -222,7 +221,6 @@ def main(
     show_thinking: bool,
     no_ime: bool,
     interaction_mode: str,
-    query: str | None,
 ) -> None:
     """
     AloneChat - 国产化、终端原生、深度中文优化的AI编程Agent
@@ -358,10 +356,15 @@ def main(
                     agent_config=parsed_agent_config,
                 )
 
-        pipe_input = session_manager.read_pipe_input()
+        pipe_input = getattr(session_manager, 'read_pipe_input', lambda: None)()
+        if not isinstance(pipe_input, str):
+            pipe_input = None
+
+        # 获取 query 参数（当没有子命令时，ctx.args 包含剩余参数）
+        query_text = " ".join(ctx.args) if ctx.args else None
 
         if print_mode or pipe_input:
-            if not query and not pipe_input:
+            if not query_text and not pipe_input:
                 console.print("[red]错误: 打印模式需要提供查询 / Error: Print mode requires query[/red]")
                 sys.exit(1)
 
@@ -372,7 +375,7 @@ def main(
                 )
 
             execute_print_mode(
-                query=query or "",
+                query=query_text or "",
                 config_manager=config_manager,
                 session_manager=session_manager,
                 output_format=output_format,
@@ -381,17 +384,17 @@ def main(
             )
             return
 
-        if query:
+        if query_text:
             from alonechat.commands.chat import start_interactive_with_query
             start_interactive_with_query(
                 ctx.obj,
-                initial_query=query,
+                initial_query=query_text,
                 session_manager=session_manager,
             )
             return
 
-        from alonechat.commands.chat import start_interactive
-        start_interactive(ctx.obj, session_manager=session_manager)
+        from alonechat.tui import start_tui
+        start_tui(session_manager=session_manager)
 
 
 main.add_command(init.init_command, name="init")

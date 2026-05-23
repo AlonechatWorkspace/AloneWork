@@ -1,218 +1,316 @@
 """
-会话管理器 / Session Manager
+会话管理器 - Session Manager
 
-管理会话的生命周期 / Manages session lifecycle
-
-增强功能 / Enhanced Features:
-- 会话分叉 / Session fork/branch
-- 显示名称设置 / Display name setting
-- 代理配置覆盖 / Agent config override
-- 自动压缩集成 / Auto compression integration
+管理会话的生命周期，使用SQLite存储
+Manage session lifecycle with SQLite storage
 """
 
-import sys
-from pathlib import Path
-from typing import Optional, Dict, Any
+import uuid
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from alonechat.session.storage import SessionStorage, Session
+from rich.console import Console
+
+from agent_framework.storage import SQLiteSessionStorage, SessionData
+from agent_framework.core.types import InteractionMode
+
+
+console = Console()
 
 
 class SessionManager:
     """
-    会话管理器 / Session Manager
+    会话管理器 - Session Manager
     
-    增强功能 / Enhanced Features:
-    - fork_session(): 分叉会话 / Fork session
-    - set_display_name(): 设置显示名称 / Set display name
-    - set_agent_config(): 设置代理配置 / Set agent config
+    管理会话的创建、加载、保存、删除等操作
+    Manage session creation, loading, saving, deletion
+    
+    特性 / Features:
+    - SQLite存储 / SQLite storage
+    - 会话搜索 / Session search
+    - 会话分叉 / Session fork
+    - 会话归档 / Session archive
     """
     
-    def __init__(self, storage_dir: Optional[Path] = None):
-        self.storage = SessionStorage(storage_dir)
-        self.current_session: Optional[Session] = None
+    def __init__(
+        self,
+        db_path: Optional[str] = None,
+        verbose: bool = False,
+    ):
+        """
+        初始化会话管理器 / Initialize session manager
+        
+        Args:
+            db_path: 数据库路径 / Database path
+            verbose: 是否显示详细信息 / Whether to show verbose info
+        """
+        if db_path is None:
+            db_path = str(Path.home() / ".alonechat" / "data" / "sessions.db")
+        
+        self.storage = SQLiteSessionStorage(db_path)
+        self.verbose = verbose
+        self._current_session: Optional[SessionData] = None
     
-    def create_session(
-        self, 
-        session_id: Optional[str] = None,
+    @property
+    def current_session(self) -> Optional[SessionData]:
+        """获取当前会话 / Get current session"""
+        return self._current_session
+    
+    async def create_session(
+        self,
         display_name: Optional[str] = None,
-        agent_config: Optional[Dict[str, Any]] = None,
-    ) -> Session:
+        mode: str = "agent",
+        interaction_mode: str = "agent",
+        parent_id: Optional[str] = None,
+        branch_point: Optional[int] = None,
+    ) -> SessionData:
         """
         创建新会话 / Create new session
         
         Args:
-            session_id: 会话ID / Session ID
             display_name: 显示名称 / Display name
-            agent_config: 代理配置 / Agent config
+            mode: Agent模式 / Agent mode
+            interaction_mode: 交互模式 / Interaction mode
+            parent_id: 父会话ID / Parent session ID
+            branch_point: 分支点 / Branch point
+        
+        Returns:
+            新会话 / New session
         """
-        session = Session.create(session_id, display_name)
-        session.metadata["cwd"] = str(Path.cwd())
-        if agent_config:
-            session.agent_config = agent_config
-        self.storage.save(session)
-        self.current_session = session
+        session_id = str(uuid.uuid4())
+        now = datetime.utcnow()
+        
+        session = SessionData(
+            id=session_id,
+            display_name=display_name or f"Session {now.strftime('%Y-%m-%d %H:%M')}",
+            created_at=now,
+            updated_at=now,
+            parent_id=parent_id,
+            branch_point=branch_point,
+            mode=mode,
+            interaction_mode=interaction_mode,
+        )
+        
+        await self.storage.save(session)
+        self._current_session = session
+        
+        if self.verbose:
+            console.print(f"[green]✓ 创建会话: {session.id}[/green]")
+        
         return session
     
-    def fork_session(
-        self, 
-        branch_point: Optional[int] = None,
-        display_name: Optional[str] = None,
-    ) -> Optional[Session]:
+    async def load_session(self, session_id: str) -> Optional[SessionData]:
         """
-        分叉当前会话 / Fork current session
-        
-        保留原会话并创建新分支 / Keep original session and create new branch
+        加载会话 / Load session
         
         Args:
-            branch_point: 分叉点消息索引（None表示当前所有消息）/ Branch point index
-            display_name: 新会话显示名称 / New session display name
+            session_id: 会话ID / Session ID
         
         Returns:
-            新创建的分叉会话 / New forked session
+            会话数据 / Session data
         """
-        if self.current_session is None:
+        session = await self.storage.load(session_id)
+        if session:
+            self._current_session = session
+            if self.verbose:
+                console.print(f"[green]✓ 加载会话: {session_id}[/green]")
+        return session
+    
+    async def save_current_session(self) -> bool:
+        """
+        保存当前会话 / Save current session
+        
+        Returns:
+            是否成功 / Whether successful
+        """
+        if not self._current_session:
+            return False
+        
+        self._current_session.updated_at = datetime.utcnow()
+        await self.storage.save(self._current_session)
+        return True
+    
+    async def delete_session(self, session_id: str) -> bool:
+        """
+        删除会话 / Delete session
+        
+        Args:
+            session_id: 会话ID / Session ID
+        
+        Returns:
+            是否成功 / Whether successful
+        """
+        success = await self.storage.delete(session_id)
+        if success and self._current_session and self._current_session.id == session_id:
+            self._current_session = None
+        return success
+    
+    async def list_sessions(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[SessionData]:
+        """
+        列出会话 / List sessions
+        
+        Args:
+            limit: 最大数量 / Maximum count
+            offset: 偏移量 / Offset
+        
+        Returns:
+            会话列表 / Session list
+        """
+        return await self.storage.list(limit=limit, offset=offset)
+    
+    async def search_sessions(
+        self,
+        query: str,
+        limit: int = 20,
+    ) -> List[SessionData]:
+        """
+        搜索会话 / Search sessions
+        
+        Args:
+            query: 搜索关键词 / Search keyword
+            limit: 最大数量 / Maximum count
+        
+        Returns:
+            匹配的会话列表 / Matched session list
+        """
+        return await self.storage.search(query, limit=limit)
+    
+    async def fork_session(
+        self,
+        session_id: Optional[str] = None,
+        display_name: Optional[str] = None,
+    ) -> Optional[SessionData]:
+        """
+        分叉会话 / Fork session
+        
+        Args:
+            session_id: 要分叉的会话ID / Session ID to fork
+            display_name: 新会话名称 / New session name
+        
+        Returns:
+            新会话 / New session
+        """
+        source_id = session_id or (self._current_session.id if self._current_session else None)
+        if not source_id:
             return None
         
-        forked = self.current_session.fork(branch_point)
-        if display_name:
-            forked.display_name = display_name
-        forked.metadata["cwd"] = str(Path.cwd())
+        source = await self.storage.load(source_id)
+        if not source:
+            return None
         
-        self.storage.save(forked)
-        self.storage.save(self.current_session)
+        branch_point = len(source.messages)
         
-        self.current_session = forked
+        forked = await self.create_session(
+            display_name=display_name or f"{source.display_name} (fork)",
+            mode=source.mode,
+            interaction_mode=source.interaction_mode,
+            parent_id=source_id,
+            branch_point=branch_point,
+        )
+        
+        forked.messages = source.messages.copy()
+        await self.storage.save(forked)
+        
+        if self.verbose:
+            console.print(f"[green]✓ 分叉会话: {source_id} → {forked.id}[/green]")
+        
         return forked
     
-    def set_display_name(self, name: str) -> bool:
+    async def archive_session(self, session_id: str) -> bool:
         """
-        设置当前会话显示名称 / Set current session display name
+        归档会话 / Archive session
         
         Args:
-            name: 显示名称 / Display name
+            session_id: 会话ID / Session ID
         
         Returns:
             是否成功 / Whether successful
         """
-        if self.current_session is None:
-            return False
-        
-        self.current_session.display_name = name
-        self.save_current_session()
-        return True
+        return await self.storage.update_metadata(session_id, {"archived": True})
     
-    def set_agent_config(self, config: Dict[str, Any]) -> bool:
+    async def add_message(
+        self,
+        role: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> int:
         """
-        设置当前会话代理配置 / Set current session agent config
+        添加消息到当前会话 / Add message to current session
         
         Args:
-            config: 代理配置 / Agent config
+            role: 角色 / Role
+            content: 内容 / Content
+            metadata: 元数据 / Metadata
         
         Returns:
-            是否成功 / Whether successful
+            消息索引 / Message index
         """
-        if self.current_session is None:
-            return False
+        if not self._current_session:
+            await self.create_session()
         
-        self.current_session.agent_config = config
-        self.save_current_session()
-        return True
-    
-    def get_agent_config(self) -> Dict[str, Any]:
-        """
-        获取当前会话代理配置 / Get current session agent config
-        
-        Returns:
-            代理配置 / Agent config
-        """
-        if self.current_session:
-            return self.current_session.agent_config.copy()
-        return {}
-    
-    def continue_session(self) -> Optional[Session]:
-        """继续最近的会话 / Continue latest session"""
-        cwd = str(Path.cwd())
-        
-        session = self.storage.get_session_by_cwd(cwd)
-        if session:
-            self.current_session = session
-            return session
-        
-        session = self.storage.get_latest_session()
-        if session:
-            self.current_session = session
-            return session
-        
-        return None
-    
-    def resume_session(self, session_id: str) -> Optional[Session]:
-        """恢复指定会话 / Resume specific session"""
-        session = self.storage.load(session_id)
-        if session:
-            self.current_session = session
-            return session
-        return None
-    
-    def save_current_session(self) -> None:
-        """保存当前会话 / Save current session"""
-        if self.current_session:
-            self.storage.save(self.current_session)
-    
-    def add_message(self, role: str, content: str) -> None:
-        """添加消息到当前会话 / Add message to current session"""
-        if self.current_session is None:
-            self.create_session()
-        
-        self.current_session.messages.append({
+        message = {
             "role": role,
             "content": content,
-            "timestamp": datetime.now().isoformat()
-        })
-        self.save_current_session()
-    
-    def get_messages(self) -> list[dict]:
-        """获取当前会话的消息 / Get messages from current session"""
-        if self.current_session:
-            return self.current_session.messages.copy()
-        return []
-    
-    def clear_messages(self) -> None:
-        """清除当前会话的消息 / Clear messages from current session"""
-        if self.current_session:
-            self.current_session.messages = []
-            self.save_current_session()
-    
-    def list_sessions(self, limit: int = 20) -> list[Session]:
-        """列出所有会话 / List all sessions"""
-        return self.storage.list_sessions(limit)
-    
-    def delete_session(self, session_id: str) -> bool:
-        """删除会话 / Delete session"""
-        return self.storage.delete(session_id)
-    
-    def get_session_info(self) -> dict:
-        """获取当前会话信息 / Get current session info"""
-        if self.current_session is None:
-            return {
-                "has_session": False,
-                "id": None,
-                "message_count": 0,
-                "created_at": None,
-                "updated_at": None
-            }
-        
-        return {
-            "has_session": True,
-            "id": self.current_session.id,
-            "message_count": len(self.current_session.messages),
-            "created_at": self.current_session.created_at,
-            "updated_at": self.current_session.updated_at,
-            "cwd": self.current_session.metadata.get("cwd")
+            "timestamp": datetime.utcnow().isoformat(),
+            "metadata": metadata or {},
         }
+        self._current_session.messages.append(message)
+        self._current_session.updated_at = datetime.utcnow()
+        await self.storage.save(self._current_session)
+        
+        return len(self._current_session.messages) - 1
     
-    def read_pipe_input(self) -> Optional[str]:
-        """读取管道输入 / Read piped input"""
-        if not sys.stdin.isatty():
-            return sys.stdin.read()
-        return None
+    async def get_messages(
+        self,
+        start: int = 0,
+        end: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        获取当前会话的消息 / Get messages from current session
+        
+        Args:
+            start: 起始索引 / Start index
+            end: 结束索引 / End index
+        
+        Returns:
+            消息列表 / Message list
+        """
+        if not self._current_session:
+            return []
+        return self._current_session.messages[start:end]
+    
+    async def get_stats(self) -> Dict[str, Any]:
+        """
+        获取存储统计 / Get storage statistics
+        
+        Returns:
+            统计信息 / Statistics
+        """
+        return await self.storage.get_stats()
+    
+    def set_interaction_mode(self, mode: InteractionMode | str) -> bool:
+        """
+        设置当前会话的交互模式 / Set interaction mode for current session
+        
+        Args:
+            mode: 交互模式 / Interaction mode
+        
+        Returns:
+            是否成功 / Whether successful
+        """
+        if not self._current_session:
+            return False
+        
+        if isinstance(mode, str):
+            try:
+                mode = InteractionMode(mode.lower())
+            except ValueError:
+                return False
+        
+        self._current_session.interaction_mode = mode.value
+        return True

@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 import json
 
-from ..agents.supervisor import Task, Subtask, TaskPriority, TaskStatus
+from ..agents.supervisor import Task, Subtask
 
 
 class DecompositionStrategy(Enum):
@@ -43,8 +43,8 @@ class PlanStep:
 
 @dataclass
 class ExecutionPlan:
-    id: str
-    name: str
+    id: str = ""
+    name: str = ""
     description: str = ""
     steps: List[PlanStep] = field(default_factory=list)
     strategy: DecompositionStrategy = DecompositionStrategy.SEQUENTIAL
@@ -316,7 +316,7 @@ class TaskPlanner:
         steps.append(verify_step)
         
         return ExecutionPlan(
-            name=f"顺序执行: {task.name}",
+            name=f"顺序执行: {getattr(task, 'name', task.description[:30])}",
             description=task.description,
             steps=steps,
             strategy=DecompositionStrategy.SEQUENTIAL,
@@ -358,7 +358,7 @@ class TaskPlanner:
         steps.append(merge_step)
         
         return ExecutionPlan(
-            name=f"并行执行: {task.name}",
+            name=f"并行执行: {getattr(task, 'name', task.description[:30])}",
             description=task.description,
             steps=steps,
             strategy=DecompositionStrategy.PARALLEL,
@@ -396,7 +396,7 @@ class TaskPlanner:
             current_deps = create_level(level, current_deps)
         
         return ExecutionPlan(
-            name=f"层次执行: {task.name}",
+            name=f"层次执行: {getattr(task, 'name', task.description[:30])}",
             description=task.description,
             steps=steps,
             strategy=DecompositionStrategy.HIERARCHICAL,
@@ -443,7 +443,7 @@ class TaskPlanner:
         ))
         
         return ExecutionPlan(
-            name=f"条件执行: {task.name}",
+            name=f"条件执行: {getattr(task, 'name', task.description[:30])}",
             description=task.description,
             steps=steps,
             strategy=DecompositionStrategy.CONDITIONAL,

@@ -1,5 +1,18 @@
-"""命令模块"""
+"""
+Team模块 / Team Module
 
-from alonechat.commands import init, chat, generate, test, commit, data, workflow, env
+CLI Team协作模式
+CLI Team collaboration mode
+"""
 
-__all__ = ["init", "chat", "generate", "test", "commit", "data", "workflow", "env"]
+from .team_mode import (
+    CLITeamMode,
+    display_worker_list,
+    display_subtask_table,
+)
+
+__all__ = [
+    "CLITeamMode",
+    "display_worker_list",
+    "display_subtask_table",
+]

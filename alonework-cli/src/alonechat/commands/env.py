@@ -49,32 +49,29 @@ def env_status(ctx: click.Context) -> None:
     
     console.print(Panel(
         f"[bold]世界状态 / World State[/bold]\n"
-        f"工作目录: {env_state.world_state.working_directory}\n"
-        f"项目根目录: {env_state.world_state.project_root}\n"
-        f"可用工具: {len(env_state.world_state.available_tools)}\n"
-        f"文件系统状态: {env_state.world_state.filesystem_state}\n\n"
+        f"变量数: {len(env_state.world.variables)}\n"
+        f"资源数: {len(env_state.world.resources)}\n"
+        f"元数据: {len(env_state.world.metadata)} 项\n\n"
         f"[bold]Agent状态 / Agent State[/bold]\n"
-        f"当前任务: {env_state.agent_state.current_task or '无'}\n"
-        f"当前计划: {env_state.agent_state.current_plan or '无'}\n"
-        f"执行历史: {len(env_state.agent_state.execution_history)} 条\n"
-        f"知识库: {len(env_state.agent_state.knowledge_base)} 条\n\n"
+        f"Agent数量: {len(env_state.agents)}\n"
+        f"\n"
         f"[bold]交互历史 / Interaction History[/bold]\n"
-        f"总交互数: {len(env_state.interaction_history.interactions)}\n"
-        f"最后交互: {env_state.interaction_history.last_interaction_time or '无'}",
+        f"总记录数: {len(env_state.history.records)}\n"
+        f"最后记录: {env_state.history.records[-1].get('timestamp', '无') if env_state.history.records else '无'}",
         border_style="cyan",
     ))
     
-    if env_state.interaction_history.interactions:
-        table = Table(title="最近交互 / Recent Interactions")
+    if env_state.history.records:
+        table = Table(title="最近记录 / Recent Records")
         table.add_column("时间", style="dim")
-        table.add_column("类型", style="cyan")
-        table.add_column("内容", style="green")
+        table.add_column("Agent", style="cyan")
+        table.add_column("操作", style="green")
         
-        for interaction in env_state.interaction_history.interactions[-5:]:
+        for record in env_state.history.records[-5:]:
             table.add_row(
-                interaction.get("timestamp", "")[:19],
-                interaction.get("type", "N/A"),
-                str(interaction.get("content", ""))[:50],
+                record.get("timestamp", "")[:19] if isinstance(record, dict) else "",
+                record.get("agent_id", "N/A") if isinstance(record, dict) else "",
+                str(record.get("action", ""))[:50] if isinstance(record, dict) else "",
             )
         
         console.print(table)
@@ -288,23 +285,15 @@ def env_tree(
     tree = Tree("[bold cyan]环境状态 / Environment State[/bold cyan]")
     
     world = tree.add("[bold]世界状态 / World State[/bold]")
-    world.add(f"工作目录: {env_state.world_state.working_directory}")
-    world.add(f"项目根目录: {env_state.world_state.project_root}")
-    
-    tools = world.add(f"可用工具 ({len(env_state.world_state.available_tools)})")
-    for tool in env_state.world_state.available_tools[:max_depth]:
-        tools.add(f"{tool}")
+    world.add(f"变量数: {len(env_state.world.variables)}")
+    world.add(f"资源数: {len(env_state.world.resources)}")
+    world.add(f"元数据: {len(env_state.world.metadata)} 项")
     
     agent = tree.add("[bold]Agent状态 / Agent State[/bold]")
-    agent.add(f"当前任务: {env_state.agent_state.current_task or '无'}")
-    agent.add(f"当前计划: {env_state.agent_state.current_plan or '无'}")
-    
-    history = agent.add(f"执行历史 ({len(env_state.agent_state.execution_history)})")
-    for i, exec_hist in enumerate(env_state.agent_state.execution_history[-max_depth:]):
-        history.add(f"{exec_hist}")
+    agent.add(f"Agent数量: {len(env_state.agents)}")
     
     interactions = tree.add("[bold]交互历史 / Interaction History[/bold]")
-    interactions.add(f"总交互数: {len(env_state.interaction_history.interactions)}")
-    interactions.add(f"最后交互: {env_state.interaction_history.last_interaction_time or '无'}")
+    interactions.add(f"总记录数: {len(env_state.history.records)}")
+    interactions.add(f"最后记录: {env_state.history.records[-1].get('timestamp', '无') if env_state.history.records else '无'}")
     
     console.print(tree)

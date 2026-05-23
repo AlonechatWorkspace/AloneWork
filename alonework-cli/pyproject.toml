@@ -3,8 +3,8 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "alonechat"
-version = "0.2.0"
+name = "alonework-cli"
+version = "0.2.3"
 description = "国产化、终端原生、深度中文优化的AI编程Agent"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,6 +33,7 @@ dependencies = [
     "PyYAML>=6.0",
     "tomli>=2.0.0",
     "tomli-w>=1.0.0",
+    "aiosqlite>=0.20.0",
 ]
 
 [project.optional-dependencies]
@@ -58,7 +59,7 @@ agent-framework = [
 ]
 
 [project.scripts]
-alonechat = "alonechat.cli:main"
+alonework = "alonechat.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Ryan-178/AloneChatWorkspace"
